@@ -11,7 +11,7 @@ echo   常用命令:
 echo     SHOW TABLES;                          看有哪些表
 echo     SELECT * FROM bill_all LIMIT 5;       看合并总表
 echo     SELECT * FROM v_spend LIMIT 5;        看真实消费口径
-echo     SOURCE F:/作品集/money analyse/账单分析查询.sql;   跑全部分析
+echo     SOURCE F:/work Buddy/作品集/money analyse/账单分析查询.sql;   跑全部分析
 echo     EXIT;                                 退出
 echo ============================================================
 echo   口径三条铁律:
