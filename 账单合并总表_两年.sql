@@ -7,11 +7,14 @@
 --     目的：先看「同一套规则放到两年 3,789 条上会不会崩」。
 --     改规则是下一步的事，不能一边换数据一边换口径，否则差异归因不明。
 --
---   ★ 两处有意的差异（都是修已知缺陷，不是换口径）：
+--   ★ 三处有意的差异（都是修已知缺陷，不是换口径）：
 --     ① 工行的 counterparty 改用新数据才有的「对方户名」，
 --        旧版用摘要当商户 → 会出现一个叫「消费」的假商户（22 笔）。
 --        新表用 COALESCE(对方户名, 摘要) 修掉。
 --     ② 工行 counterparty 为空或 '/' 时回落到摘要。
+--     ③ 工行退款回流（第四·五节，2026-11-14 业务方拍板 30 天窗口）——
+--        三源对退款的建模不同，工行的扣款行不会自己消失，必须显式配对剔除。
+--        这一条是「修缺陷」，不是「换口径」：它让工行和微信/支付宝站到同一标准上。
 --
 --   ⚠ 只建 bill2_* 与 v2_*，不触碰旧作品的 bill_* / v_bill / v_spend
 -- ============================================================
@@ -224,6 +227,78 @@ WHERE category = '转账红包' AND amount < 1;
 
 UPDATE bill2_all SET transfer_kind = '人情往来'
 WHERE category = '转账红包' AND transfer_kind IS NULL;
+
+-- ============================================================
+-- 四·五、工行退款回流（2026-11-14 业务方拍板：配对窗口 30 天）
+--
+-- 【为什么需要这一节】
+--   三个源对「退款」的建模完全不同：
+--     微信   —— 改写原记录状态（已全额退款 / 已退款(¥50.00)），
+--               原行走不到「支出」分支，天然剔除。
+--     支付宝 —— 新增一条「退款成功」行，原行状态改成「交易关闭」，
+--               白名单 status='交易成功' 把它挡在外面，也天然剔除。
+--     工行   —— 原扣款行原样保留，只追加一条正数流水。
+--               没有任何机制把扣款行剔掉 → 账面上等于「扣了钱、退了钱，
+--               但扣的那笔还留在支出里」。
+--   这是三源建模差异，不是任何一方算错。缺陷在合并层的口径。
+--
+-- 【配对窗口为什么是 30 天】（业务方拍板，2026-11-14）
+--   实测间隔分布：
+--     当天      22 笔 ¥1,067.50
+--     1-3 天     5 笔    ¥95.97
+--     3-7 天     5 笔    ¥68.82
+--     7-30 天    9 笔   ¥211.49
+--     30 天以上 10 笔   ¥107.01   ← 不认
+--   30 天以上那 10 笔大概率是「同额不同单」（两次 ¥9.90 的拼多多，
+--   一次买一次退，但不是同一单）。认了就是硬凑，因此不认。
+--
+-- 【为什么不能直接 EXISTS】
+--   同额扣款与退款并非总是一对一，实测 4 个金额有冲突：
+--     ¥29.90  2 笔扣款（同一火锅店相隔 5 分钟的重复支付）/ 1 笔退款
+--     ¥5.99   2 笔扣款（美团、支付宝，商户不同）/ 1 笔退款
+--     ¥8.40   2 笔扣款 / 2 笔退款（一对一）
+--     ¥0.01   9 笔扣款 / 3 笔退款（只有最早 3 笔在退款之前）
+--   直接 EXISTS 会把 ¥29.90 和 ¥5.99 各多剔 1 笔（合计 ¥35.89）——
+--   那是真花掉的钱，误伤的代价比漏判更高。
+--   → 改为「按金额分区、取退款时间差最小的 N 笔，N = 该金额退款笔数」。
+--     验算：¥29.90 剔 1 笔（两笔时间差并列，取 id 小的）
+--           ¥5.99  剔 1 笔（退款距支付宝那笔 8 天，距美团 19 天 → 取前者）
+--           ¥8.40 / ¥0.01 全剔（严格一对一）
+--
+-- 【只处理 is_dup=0】
+--   已被跨源判重剔掉的工行行不再重复处理，避免两道规则互相干扰。
+-- ============================================================
+DROP TEMPORARY TABLE IF EXISTS tmp_g_refund_pair;
+CREATE TEMPORARY TABLE tmp_g_refund_pair AS
+SELECT b2.id,
+       b2.amount,
+       (SELECT MIN(DATEDIFF(r.trade_time, b2.trade_time))
+          FROM bill2_icbc r
+         WHERE r.summary = '退款'
+           AND r.amount_signed = b2.amount
+           AND r.trade_time >= b2.trade_time
+           AND DATEDIFF(r.trade_time, b2.trade_time) <= 30) AS min_diff
+FROM bill2_all b2
+WHERE b2.source = '工商银行'
+  AND b2.is_refund = 0
+  AND b2.is_dup = 0;
+
+UPDATE bill2_all b
+JOIN (
+  SELECT id FROM (
+    SELECT id, amount, min_diff,
+           ROW_NUMBER() OVER (PARTITION BY amount ORDER BY min_diff, id) AS rn
+    FROM tmp_g_refund_pair
+    WHERE min_diff IS NOT NULL
+  ) ranked
+  WHERE ranked.rn <= (
+          SELECT COUNT(*) FROM bill2_icbc r2
+           WHERE r2.summary = '退款' AND r2.amount_signed = ranked.amount
+        )
+) hit ON hit.id = b.id
+SET b.is_refund = 1;
+
+DROP TEMPORARY TABLE IF EXISTS tmp_g_refund_pair;
 
 -- ============================================================
 -- 五、视图（口径与旧版完全一致）

@@ -245,6 +245,60 @@ UPDATE bill_all SET transfer_kind = '人情往来'
 WHERE category = '转账红包' AND transfer_kind IS NULL;
 
 -- ============================================================
+-- 工行退款回流（2026-11-14 业务方拍板：配对窗口 30 天）
+--
+-- 【为什么需要这一节】
+--   三个源对「退款」的建模完全不同：
+--     微信   —— 改写原记录状态（已全额退款），原行走不到「支出」分支，天然剔除
+--     支付宝 —— 新增「退款成功」行 + 原行改成「交易关闭」，
+--               白名单 status='交易成功' 挡在外面，也天然剔除
+--     工行   —— 原扣款行原样保留，只追加一条正数流水。
+--               没有任何机制把扣款行剔掉 → 扣的钱还留在支出里
+--   这是三源建模差异，不是谁算错了。缺陷在合并层的口径。
+--
+-- 【本窗口的实测规模】
+--   半年窗口内命中的 3 笔 ¥85.70（约占 L3 的 0.96%）。
+--   两年版（账单合并总表_两年.sql）同一条规则命中的是 39 笔 ¥1,407.89。
+--   → 这个缺陷一直在，只是窗口小的时候几乎看不见。
+--
+-- 【配对窗口 30 天的依据、以及为什么不能直接 EXISTS】
+--   完整论证写在 `账单合并总表_两年.sql` 第四·五节（含 4 个金额冲突的实测明细）。
+--   一句话：同额扣款与退款并非总是一对一，直接 EXISTS 会误剔真花掉的钱，
+--   因此改为「按金额分区、取退款时间差最小的 N 笔，N = 该金额退款笔数」。
+-- ============================================================
+DROP TEMPORARY TABLE IF EXISTS tmp_g_refund_pair;
+CREATE TEMPORARY TABLE tmp_g_refund_pair AS
+SELECT b2.id,
+       b2.amount,
+       (SELECT MIN(DATEDIFF(r.trade_time, b2.trade_time))
+          FROM bill_icbc r
+         WHERE r.summary = '退款'
+           AND r.amount_signed = b2.amount
+           AND r.trade_time >= b2.trade_time
+           AND DATEDIFF(r.trade_time, b2.trade_time) <= 30) AS min_diff
+FROM bill_all b2
+WHERE b2.source = '工商银行'
+  AND b2.is_refund = 0
+  AND b2.is_dup = 0;
+
+UPDATE bill_all b
+JOIN (
+  SELECT id FROM (
+    SELECT id, amount, min_diff,
+           ROW_NUMBER() OVER (PARTITION BY amount ORDER BY min_diff, id) AS rn
+    FROM tmp_g_refund_pair
+    WHERE min_diff IS NOT NULL
+  ) ranked
+  WHERE ranked.rn <= (
+          SELECT COUNT(*) FROM bill_icbc r2
+           WHERE r2.summary = '退款' AND r2.amount_signed = ranked.amount
+        )
+) hit ON hit.id = b.id
+SET b.is_refund = 1;
+
+DROP TEMPORARY TABLE IF EXISTS tmp_g_refund_pair;
+
+-- ============================================================
 -- 校验：合并后总览
 -- ============================================================
 SELECT '=== 总览（含重复）===' AS '';
