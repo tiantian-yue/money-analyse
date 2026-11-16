@@ -15,7 +15,7 @@ USE sqlpractice;
 
 -- 口径提醒（与半年版一致的三条铁律）：
 --   ① 全部支出 FROM v2_bill（已剔退款 + 跨源重复）
---   ② 真实消费 FROM v2_spend（转账看性质、非转账看金额 —— 分叉判，不是层层相减）
+--   ② 日常开销 FROM v2_spend（转账看性质、非转账看金额 —— 分叉判，不是层层相减）
 --   ③ 改口径只改 账单合并总表_两年.sql 里的视图，查询不重复写条件
 
 -- ============================================================
@@ -132,7 +132,7 @@ GROUP BY 时段;
 -- ============================================================
 -- 查询 9 · 三口径对账 + 恒等式自检 ← 【每次改口径都要跑这条】
 --   L1 全部支出 = 一次性大额 + L2 高频小额
---   L3 真实消费 = L2 高频小额 + 人情往来      ← 分叉判，不是层层相减
+--   L3 日常开销 = L2 高频小额 + 人情往来      ← 分叉判，不是层层相减
 --   2026-11-14 实测：2,485 = 181 + 2,304；2,406 = 2,304 + 102（口径已含工行退款回流）
 -- ============================================================
 SELECT 'L1 全部支出'        AS 口径, COUNT(*) AS 笔数, ROUND(SUM(amount),2) AS 金额 FROM v2_bill
@@ -140,7 +140,7 @@ UNION ALL SELECT '  ├ 一次性大额', COUNT(*), ROUND(SUM(amount),2) FROM bi
            WHERE is_oneoff = 1 AND is_dup = 0 AND is_refund = 0
 UNION ALL SELECT '  └ L2 高频小额', COUNT(*), ROUND(SUM(amount),2) FROM bill2_all
            WHERE is_oneoff = 0 AND is_dup = 0 AND is_refund = 0
-UNION ALL SELECT 'L3 真实消费', COUNT(*), ROUND(SUM(amount),2) FROM v2_spend
+UNION ALL SELECT 'L3 日常开销', COUNT(*), ROUND(SUM(amount),2) FROM v2_spend
 UNION ALL SELECT '  ├ 其中人情往来', COUNT(*), ROUND(SUM(amount),2) FROM v2_spend WHERE category = '转账红包'
 UNION ALL SELECT '  └ 其余（= L2）', COUNT(*), ROUND(SUM(amount),2) FROM v2_spend WHERE category <> '转账红包';
 
@@ -293,7 +293,7 @@ GROUP BY summary;
 --   半年窗口里最贵的一笔电商是 ¥1,120（已退款），所以「电商购物不算一次性」
 --   这条错规则**没被暴露**。两年窗口里有：
 --     2025-06-26 拼多多 ¥6,000 / 2024-09-20 京东 ¥4,774 / 2024-09-14 拼多多 ¥1,036
---   三笔全部 is_oneoff=0，全部混在「真实消费」里 → L3 虚高约 22%
+--   三笔全部 is_oneoff=0，全部混在「日常开销」里 → L3 虚高约 22%
 --   本查询把「单笔 ≥ ¥500 却仍留在 L3」的挑出来，让人一眼看到规则失效。
 -- ============================================================
 SELECT trade_time AS 时间, source AS 源, category AS 分类,

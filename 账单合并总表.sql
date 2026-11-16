@@ -136,7 +136,7 @@ WHERE a.in_out = '支出'
 -- ============================================================
 -- 三、工商银行：只取负向（支出）流水
 --   注意 1：工行大额里混着「微信零钱提现 → 转账」这种资金搬运，
---           不是真实消费，标记为 is_oneoff=1 排除在日常口径外
+--           不是日常开销，标记为 is_oneoff=1 排除在日常口径外
 --   注意 2（关键）：工行是「扣款侧镜像」——支付宝/微信绑工行卡付款时，
 --           同一笔会在两边各记一次。实测构成（2026-10-06 逐笔核对）：
 --             ① 支付宝绑工行卡快捷支付   17 笔 ¥113.42  ← 主力
@@ -334,11 +334,11 @@ SELECT '② 剔除一次性大额',
        COUNT(*), ROUND(SUM(amount), 2), ROUND(SUM(amount) / 6, 2)
 FROM v_bill WHERE is_oneoff = 0
 UNION ALL
-SELECT '③ 真实消费（v_spend）',
+SELECT '③ 日常开销（v_spend）',
        COUNT(*), ROUND(SUM(amount), 2), ROUND(SUM(amount) / 6, 2)
 FROM v_spend;
 
-SELECT '=== 分类汇总（真实消费口径）===' AS '';
+SELECT '=== 分类汇总（日常开销口径）===' AS '';
 SELECT category AS 分类, COUNT(*) AS 笔数, ROUND(SUM(amount), 2) AS 金额,
        ROUND(SUM(amount) * 100 / (SELECT SUM(amount) FROM v_spend), 1) AS 占比
 FROM v_spend

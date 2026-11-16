@@ -172,7 +172,7 @@ SELECT
     -- ⚠ 2026-11-14 新增：新数据才暴露的三类问题（旧 75 笔工行流水里没有）
     -- ① 摘要为「1」的 ¥5,550 —— 摘要列解析异常，但对方户名写着
     --    「山西财经大学代扣学费专户」，靠户名才认出是学费。
-    --    没有这一列，它会被当成「其他支出」混进真实消费。
+    --    没有这一列，它会被当成「其他支出」混进日常开销。
     -- ② 理财 / 银证转账 / 基金购买 —— 钱在自己账户间搬，不是消费。
     --    旧口径没有对应规则，导致 ¥16,929 直接进了 L3（占 22.4%）。
     WHEN i.counterparty LIKE '%学费%' THEN '学费缴费'
@@ -329,7 +329,7 @@ SELECT '① L1 全部支出（v2_bill）' AS 口径, COUNT(*) AS 笔数, ROUND(S
 UNION ALL
 SELECT '② L2 高频小额（is_oneoff=0）', COUNT(*), ROUND(SUM(amount),2) FROM v2_bill WHERE is_oneoff=0
 UNION ALL
-SELECT '③ L3 真实消费（v2_spend）', COUNT(*), ROUND(SUM(amount),2) FROM v2_spend
+SELECT '③ L3 日常开销（v2_spend）', COUNT(*), ROUND(SUM(amount),2) FROM v2_spend
 UNION ALL
 SELECT '④ 人情往来（转账类）', COUNT(*), ROUND(SUM(amount),2) FROM v2_bill WHERE category='转账红包' AND transfer_kind='人情往来';
 
